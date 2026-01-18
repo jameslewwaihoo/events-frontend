@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import { apiFetch } from "../api/client.js";
+import "./EventPage.css";
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
@@ -60,7 +62,53 @@ export default function EventPage() {
   const [lookupKey, setLookupKey] = useState("");
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupMsg, setLookupMsg] = useState("");
-
+  const [envelopeOpened, setEnvelopeOpened] = useState(false);
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const [contentVisible, setContentVisible] = useState(false);
+  const sectionRefs = useRef([]);
+  const setSectionRef = (idx) => (el) => {
+    sectionRefs.current[idx] = el;
+  };
+  const [countdown, setCountdown] = useState({ days: "--", hours: "--", minutes: "--", seconds: "--" });
+  const snapTimeout = useRef(null);
+  const snapAnimation = useRef(null);
+  const isSnapping = useRef(false);
+  const roses = useMemo(
+    () =>
+      Array.from({ length: 16 }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 6,
+        duration: 8 + Math.random() * 8,
+        size: 28 + Math.random() * 18,
+        img: i % 2 === 0 ? "/images/red-rose.png" : "/images/white-rose.png",
+      })),
+    []
+  );
+  const loveImages = useMemo(
+    () => [
+      "/images/love/IMG_0895.JPG",
+      "/images/love/IMG_0896.JPG",
+      "/images/love/IMG_0897.JPG",
+      "/images/love/IMG_4720.JPG",
+    ],
+    []
+  );
+  const loopedLoveImages = useMemo(
+    () => [...loveImages, ...loveImages, ...loveImages],
+    [loveImages]
+  );
+  const sliderRef = useRef(null);
+  const slideRefs = useRef([]);
+  const setSlideRef = (idx) => (el) => {
+    slideRefs.current[idx] = el;
+  };
+  const [activeSlide, setActiveSlide] = useState(0);
+  const activeImage = loveImages[activeSlide % loveImages.length] || loveImages[0];
+  const sliderSectionRef = useRef(null);
+  const sliderThird = useRef(0);
+  const sliderInteracting = useRef(false);
+  const sliderAutoRaf = useRef(null);
 
   // RSVP states (match your backend validation)
   const [form, setForm] = useState({
@@ -87,10 +135,7 @@ export default function EventPage() {
         setErr("");
         setEvent(null);
 
-        const res = await fetch(`/api/public/events/${slug}`, {
-          signal: controller.signal,
-          headers: { Accept: "application/json" },
-        });
+        const res = await apiFetch(`/public/events/${slug}`, { signal: controller.signal });
 
         if (!res.ok) {
           if (res.status === 404) return;
@@ -125,6 +170,215 @@ export default function EventPage() {
       setForm((prev) => ({ ...prev, session_id: "" }));
     }
   }, [form.attendance_status]); // intentionally only depend on attendance_status
+
+  useEffect(() => {
+    // no-op: reserved for future global listeners
+  }, []);
+
+  useEffect(() => {
+    const el = sliderRef.current;
+    if (!el) return;
+
+    let isDown = false;
+    let startX = 0;
+    let scrollStart = 0;
+    let lastX = 0;
+    let velocity = 0;
+    let inertiaRaf = null;
+    let third = 0;
+
+    const recalcBounds = () => {
+      third = el.scrollWidth / 3;
+      sliderThird.current = third;
+      el.scrollLeft = third;
+    };
+
+    const onDown = (e) => {
+      isDown = true;
+      startX = e.clientX;
+      scrollStart = el.scrollLeft;
+      el.classList.add("dragging");
+      lastX = e.clientX;
+      velocity = 0;
+      sliderInteracting.current = true;
+      if (inertiaRaf) {
+        cancelAnimationFrame(inertiaRaf);
+        inertiaRaf = null;
+      }
+    };
+
+    const onMove = (e) => {
+      if (!isDown) return;
+      const dx = e.clientX - startX;
+      el.scrollLeft = scrollStart - dx;
+      velocity = e.clientX - lastX;
+      lastX = e.clientX;
+      if (el.scrollLeft < third * 0.3) {
+        el.scrollLeft += third;
+      } else if (el.scrollLeft > third * 1.7) {
+        el.scrollLeft -= third;
+      }
+    };
+
+    const onUp = () => {
+      isDown = false;
+      el.classList.remove("dragging");
+      sliderInteracting.current = false;
+      const decay = 0.985;
+      const maxStep = 60;
+      const step = () => {
+        if (Math.abs(velocity) < 0.08) {
+          inertiaRaf = null;
+          return;
+        }
+        const stepVel = Math.max(Math.min(velocity, maxStep), -maxStep);
+        el.scrollLeft -= stepVel;
+        if (el.scrollLeft < third * 0.3) {
+          el.scrollLeft += third;
+        } else if (el.scrollLeft > third * 1.7) {
+          el.scrollLeft -= third;
+        }
+        velocity *= decay;
+        inertiaRaf = requestAnimationFrame(step);
+      };
+      inertiaRaf = requestAnimationFrame(step);
+    };
+
+    recalcBounds();
+
+      el.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointerleave", onUp);
+    window.addEventListener("resize", recalcBounds);
+
+    return () => {
+      el.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointerleave", onUp);
+      window.removeEventListener("resize", recalcBounds);
+      if (inertiaRaf) cancelAnimationFrame(inertiaRaf);
+    };
+  }, [loopedLoveImages.length]);
+
+  useEffect(() => {
+    const el = sliderRef.current;
+    if (!el) return;
+
+    const computeActive = () => {
+      const center = el.scrollLeft + el.clientWidth / 2;
+      let nearestIdx = 0;
+      let nearestDiff = Infinity;
+      slideRefs.current.forEach((node, idx) => {
+        if (!node) return;
+        const rect = node.getBoundingClientRect();
+        const slideCenter = rect.left + rect.width / 2 + el.scrollLeft - el.getBoundingClientRect().left;
+        const diff = Math.abs(slideCenter - center);
+        if (diff < nearestDiff) {
+          nearestDiff = diff;
+          nearestIdx = idx;
+        }
+      });
+      const normalized = nearestIdx % loveImages.length;
+      setActiveSlide(normalized);
+    };
+
+    computeActive();
+    const onScroll = () => computeActive();
+    const onResize = () => computeActive();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResize);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
+  // auto-scroll disabled; drag only
+
+  useEffect(() => {
+    if (!contentVisible) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) entry.target.classList.add("is-visible");
+          else entry.target.classList.remove("is-visible");
+        });
+      },
+      { threshold: 0.45, rootMargin: "-10% 0px" }
+    );
+
+    sectionRefs.current.forEach((el) => {
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [contentVisible, sectionRefs]);
+
+  const smoothScrollTo = (targetY, duration = 900) => {
+    if (snapAnimation.current) cancelAnimationFrame(snapAnimation.current);
+    const startY = window.scrollY || window.pageYOffset;
+    const diff = targetY - startY;
+    const start = performance.now();
+    const ease = (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t); // easeInOutQuad
+
+    const step = (now) => {
+      const elapsed = Math.min((now - start) / duration, 1);
+      const eased = ease(elapsed);
+      window.scrollTo(0, startY + diff * eased);
+      if (elapsed < 1) {
+        snapAnimation.current = requestAnimationFrame(step);
+      }
+    };
+
+    snapAnimation.current = requestAnimationFrame(step);
+  };
+
+
+  useEffect(() => {
+    if (!contentVisible) return;
+
+    const handleScroll = () => {
+      // Auto snap disabled
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      if (snapTimeout.current) clearTimeout(snapTimeout.current);
+      if (snapAnimation.current) cancelAnimationFrame(snapAnimation.current);
+    };
+  }, [contentVisible, sectionRefs]);
+
+  useEffect(() => {
+    if (!event?.event_date) return;
+    const target = new Date(event.event_date);
+
+    const updateCountdown = () => {
+      const now = new Date();
+      const diff = target - now;
+      if (diff <= 0) {
+        setCountdown({ days: "00", hours: "00", minutes: "00", seconds: "00" });
+        return;
+      }
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
+      const minutes = Math.floor((diff / (1000 * 60)) % 60);
+      const seconds = Math.floor((diff / 1000) % 60);
+      setCountdown({
+        days: String(days).padStart(2, "0"),
+        hours: String(hours).padStart(2, "0"),
+        minutes: String(minutes).padStart(2, "0"),
+        seconds: String(seconds).padStart(2, "0"),
+      });
+    };
+
+    updateCountdown();
+    const timer = setInterval(updateCountdown, 1000);
+    return () => clearInterval(timer);
+  }, [event?.event_date, contentVisible]);
 
 
   const sessions = useMemo(() => event?.sessions ?? [], [event]);
@@ -194,11 +448,10 @@ export default function EventPage() {
 
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/public/events/${encodeURIComponent(slug)}/rsvp`, {
+      const res = await apiFetch(`/public/events/${encodeURIComponent(slug)}/rsvp`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json",
         },
         body: JSON.stringify(buildPayload()),
       });
@@ -254,9 +507,7 @@ export default function EventPage() {
       else if (/^\+?\d[\d\s-]{6,}$/.test(key)) params.set("phone", key.replace(/\s+/g, ""));
       else params.set("invite_code", key);
 
-      const res = await fetch(`/api/public/events/${encodeURIComponent(slug)}/rsvp?` + params.toString(), {
-        headers: { Accept: "application/json" },
-      });
+      const res = await apiFetch(`/public/events/${encodeURIComponent(slug)}/rsvp?` + params.toString());
 
       const data = await res.json();
 
@@ -290,295 +541,352 @@ export default function EventPage() {
     }
   }
 
+  function onOpenEnvelope() {
+    if (envelopeOpened) return;
+    setEnvelopeOpened(true);
+    setTimeout(() => {
+      setContentVisible(true);
+      setTimeout(() => {
+        const target = sliderSectionRef.current || sectionRefs.current[0];
+        if (target) {
+          const targetY = target.offsetTop + target.offsetHeight / 2 - window.innerHeight / 2;
+          smoothScrollTo(targetY, 800);
+        } else {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+        setTimeout(() => setOverlayVisible(false), 300);
+      }, 120);
+    }, 1000);
+  }
+
 
   return (
-    <div style={{ padding: 20, textAlign: "left", maxWidth: 900, margin: "0 auto" }}>
-      <h1>{event?.title || "Event"}</h1>
-
-      {event?.welcome_message ? <p>{event.welcome_message}</p> : null}
-
-      <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
-        {event?.event_date ? (
-          <div>
-            <b>Date:</b> {event.event_date}
-          </div>
-        ) : null}
-
-        {event?.venue_name ? (
-          <div>
-            <b>Venue:</b> {event.venue_name}
-          </div>
-        ) : null}
-
-        {event?.venue_address ? (
-          <div>
-            <b>Address:</b> {event.venue_address}{" "}
-            {event?.venue_map_url ? (
-              <>
-                (
-                <a href={event.venue_map_url} target="_blank" rel="noreferrer">
-                  Map
-                </a>
-                )
-              </>
-            ) : null}
-          </div>
-        ) : null}
-
-        {event?.rsvp_deadline ? (
-          <div>
-            <b>RSVP Deadline (GMT+8):</b> {event.rsvp_deadline}
-          </div>
-        ) : null}
+    <div className="event-page">
+      <div className="rose-field" aria-hidden="true">
+        {roses.map((rose) => (
+          <span
+            key={rose.id}
+            className="rose"
+            style={{
+              "--left": `${rose.left}%`,
+              "--delay": `${rose.delay}s`,
+              "--duration": `${rose.duration}s`,
+              "--size": `${rose.size}px`,
+              "--img": `url(${rose.img})`,
+            }}
+          >
+            <span className="rose__img" />
+          </span>
+        ))}
       </div>
 
-      {loading && <p style={{ marginTop: 14 }}>Loading…</p>}
-      {err && <p style={{ color: "crimson", marginTop: 14 }}>Error: {err}</p>}
-
-      {!loading && !err && !event && (
-        <p style={{ color: "crimson", marginTop: 14 }}>
-          No event found for slug: <b>{slug}</b>
-        </p>
-      )}
-
-      {event && sessions.length > 0 ? (
-        <div style={{ marginTop: 16 }}>
-          <h3>Sessions</h3>
-          <ul>
-            {sessions.map((s) => (
-              <li key={s.id}>{formatSessionLabel(s)}</li>
-            ))}
-          </ul>
+      <div className={`invite-overlay ${overlayVisible ? "" : "invite-overlay--hide"}`}>
+        <div className="invite-overlay__inner">
+          <p className="eyebrow">Open invitation</p>
+          <h2 className="overlay-title">{event?.title || "You’re invited"}</h2>
+          <p className="muted overlay-sub">
+            Tap the envelope to reveal the details and confirm your attendance.
+          </p>
+          <div className={`envelope-photo ${envelopeOpened ? "open" : ""}`} onClick={onOpenEnvelope} aria-label="Envelope invitation" />
         </div>
-      ) : null}
-
-      <hr style={{ margin: "18px 0", border: 0, borderTop: "1px solid #ddd" }} />
-
-      <h2>RSVP</h2>
-
-      {isRsvpClosed ? (
-        <div
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #fde68a",
-            background: "#fffbeb",
-            color: "#92400e",
-            marginBottom: 10,
-          }}
-        >
-          RSVP is closed. (Deadline was <b>{event?.rsvp_deadline}</b>, GMT+8)
-        </div>
-      ) : null}
-
-      {submitOk && (
-        <div
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #bbf7d0",
-            background: "#ecfdf5",
-            color: "#166534",
-            marginBottom: 10,
-          }}
-        >
-          {submitOk}
-        </div>
-      )}
-
-      {submitErr && (
-        <div
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #fecdd3",
-            background: "#fff1f2",
-            color: "#9f1239",
-            marginBottom: 10,
-          }}
-        >
-          {submitErr}
-        </div>
-      )}
-
-      <div style={{ marginBottom: 12, display: "grid", gap: 8, maxWidth: 720 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={lookupKey}
-            onChange={(e) => setLookupKey(e.target.value)}
-            placeholder="Enter email / phone to load your RSVP"
-            style={{ ...inputStyle, flex: 1 }}
-            disabled={isRsvpClosed}
-          />
-          <button
-            type="button"
-            onClick={onLookupRsvp}
-            disabled={lookupLoading || isRsvpClosed}
-            style={{ ...btnStyle, padding: "10px 12px" }}
-          >
-            {lookupLoading ? "Loading…" : "Find my RSVP"}
-          </button>
-        </div>
-
-        {lookupMsg ? (
-          <small style={{ color: lookupMsg.includes("✅") ? "green" : "crimson" }}>
-            {lookupMsg}
-          </small>
-        ) : null}
       </div>
 
+      <div className={`event-page__shell page-content ${contentVisible ? "page-content--show" : ""}`}>
+        <div className="page-sections">
+          <section className="full-section slider-section" ref={sliderSectionRef}>
+            <div className="slider-head">
+              <p className="eyebrow">A growing toolkit for creative developers</p>
+              <h2 className="section-title">Memories to play with</h2>
+              <p className="muted">Drag these to explore the mood.</p>
+            </div>
+            <div className="love-preview">
+              <img className="love-preview__img" src={activeImage} alt="Preview" loading="lazy" />
+            </div>
+              <div className="love-slider" data-gsap-slider-list ref={sliderRef}>
+              {loopedLoveImages.map((src, idx) => {
+                const loopLen = loopedLoveImages.length;
+                const targetIndex = loveImages.length + activeSlide; // center copy
+                let offset = idx - targetIndex;
+                const half = loopLen / 2;
+                if (offset > half) offset -= loopLen;
+                if (offset < -half) offset += loopLen;
 
-      <form onSubmit={onSubmitRSVP} style={{ display: "grid", gap: 12, maxWidth: 720 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          Attendance *
-          <select
-            name="attendance_status"
-            value={form.attendance_status}
-            onChange={onFormChange}
-            style={inputStyle}
-            disabled={isRsvpClosed}
-          >
-            <option value="attending">Attending</option>
-            <option value="declined">Declined</option>
-          </select>
-          {fieldErrors.attendance_status ? (
-            <small style={{ color: "crimson" }}>{fieldErrors.attendance_status}</small>
+                let stateClass = "is-rest";
+                if (offset === 0) stateClass = "is-active";
+                else if (offset === -1) stateClass = "is-left";
+                else if (offset === 1) stateClass = "is-right";
+
+                return (
+                  <div
+                    className={`love-slide ${stateClass}`}
+                    key={src + idx}
+                    style={{ backgroundImage: `url(${src})`, "--offset": offset }}
+                    ref={setSlideRef(idx)}
+                  >
+                    <div className="love-slide__overlay" />
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="full-section" ref={setSectionRef(0)}>
+            <header className="hero surface">
+              <div className="eyebrow">You&apos;re invited</div>
+              <div className="hero__title-wrap">
+                <h1 className="hero__title">{event?.title || "Event"}</h1>
+                {event?.welcome_message ? <p className="muted">{event.welcome_message}</p> : null}
+              </div>
+
+              <div className="info-grid">
+                {event?.event_date ? (
+                  <div className="info-item">
+                    <span className="label">Date</span>
+                    <span className="value">{event.event_date}</span>
+                  </div>
+                ) : null}
+
+                {event?.venue_name ? (
+                  <div className="info-item">
+                    <span className="label">Venue</span>
+                    <span className="value">{event.venue_name}</span>
+                  </div>
+                ) : null}
+
+                {event?.venue_address ? (
+                  <div className="info-item">
+                    <span className="label">Address</span>
+                    <span className="value">
+                      {event.venue_address}{" "}
+                      {event?.venue_map_url ? (
+                        <a href={event.venue_map_url} target="_blank" rel="noreferrer" className="link">
+                          · Map
+                        </a>
+                      ) : null}
+                    </span>
+                  </div>
+                ) : null}
+
+                {event?.rsvp_deadline ? (
+                  <div className="info-item">
+                    <span className="label">RSVP deadline (GMT+8)</span>
+                    <span className="value">{event.rsvp_deadline}</span>
+                  </div>
+                ) : null}
+              </div>
+              {event?.event_date ? (
+                <div className="countdown">
+                  <div className="countdown__item">
+                    <div className="countdown__value">{countdown.days}</div>
+                    <div className="countdown__label">Days</div>
+                  </div>
+                  <div className="countdown__item">
+                    <div className="countdown__value">{countdown.hours}</div>
+                    <div className="countdown__label">Hours</div>
+                  </div>
+                  <div className="countdown__item">
+                    <div className="countdown__value">{countdown.minutes}</div>
+                    <div className="countdown__label">Minutes</div>
+                  </div>
+                  <div className="countdown__item">
+                    <div className="countdown__value">{countdown.seconds}</div>
+                    <div className="countdown__label">Seconds</div>
+                  </div>
+                </div>
+              ) : null}
+            </header>
+          </section>
+
+          <section className="full-section" ref={setSectionRef(1)}>
+            <div className="surface section-stack">
+              <div className="section-head">
+                <p className="eyebrow">Schedule</p>
+                <h3 className="section-title">What&apos;s happening</h3>
+              </div>
+              {loading && <div className="alert notice">Loading…</div>}
+              {err && <div className="alert danger">Error: {err}</div>}
+              {!loading && !err && !event && (
+                <div className="alert danger">
+                  No event found for slug: <b>{slug}</b>
+                </div>
+              )}
+              {event && sessions.length > 0 ? (
+                <ul className="sessions">
+                  {sessions.map((s) => (
+                    <li key={s.id} className="session">
+                      <div className="session__title">{formatSessionLabel(s)}</div>
+                      {s.location ? <div className="session__meta">{s.location}</div> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">Schedule details will be announced soon.</p>
+              )}
+            </div>
+          </section>
+
+          <section className="full-section" ref={setSectionRef(2)}>
+            <div className="surface form-panel">
+              <div className="panel-head">
+                <div>
+                  <p className="eyebrow">RSVP</p>
+                  <h3 className="section-title">Reserve your spot</h3>
+                </div>
+                <span className={`pill ${isRsvpClosed ? "pill--closed" : "pill--open"}`}>
+                  {isRsvpClosed ? "Closed" : "Open"}
+                </span>
+              </div>
+
+          {submitOk ? <div className="alert success">{submitOk}</div> : null}
+          {submitErr ? <div className="alert danger">{submitErr}</div> : null}
+          {isRsvpClosed ? (
+            <div className="alert warning">
+              RSVP is closed. (Deadline was <b>{event?.rsvp_deadline}</b>, GMT+8)
+            </div>
           ) : null}
-        </label>
 
-        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            Name *
-            <input
-              name="name"
-              value={form.name}
-              onChange={onFormChange}
-              placeholder="Your full name"
-              style={inputStyle}
-              disabled={isRsvpClosed}
-            />
-            {fieldErrors.name ? <small style={{ color: "crimson" }}>{fieldErrors.name}</small> : null}
-          </label>
+          <div className="panel-body">
+            <div className="lookup">
+              <p className="muted">Load your existing RSVP to edit it.</p>
+              <div className="lookup__row">
+                <input
+                  value={lookupKey}
+                  onChange={(e) => setLookupKey(e.target.value)}
+                  placeholder="Enter email / phone / invite code"
+                  className="input"
+                  disabled={isRsvpClosed}
+                />
+                <button
+                  type="button"
+                  onClick={onLookupRsvp}
+                  disabled={lookupLoading || isRsvpClosed}
+                  className="btn secondary"
+                >
+                  {lookupLoading ? "Loading…" : "Find my RSVP"}
+                </button>
+              </div>
+              {lookupMsg ? (
+                <small className={lookupMsg.includes("✅") ? "hint success" : "hint danger"}>{lookupMsg}</small>
+              ) : null}
+            </div>
 
-          <label style={{ display: "grid", gap: 6 }}>
-            Email (optional)
-            <input
-              name="email"
-              value={form.email}
-              onChange={onFormChange}
-              placeholder="you@email.com"
-              style={inputStyle}
-              disabled={isRsvpClosed}
-            />
-            {fieldErrors.email ? <small style={{ color: "crimson" }}>{fieldErrors.email}</small> : null}
-          </label>
+            <form onSubmit={onSubmitRSVP} className="rsvp-form">
+              <label className="field">
+                <span className="field__label">Attendance *</span>
+                <select
+                  name="attendance_status"
+                  value={form.attendance_status}
+                  onChange={onFormChange}
+                  className="input"
+                  disabled={isRsvpClosed}
+                >
+                  <option value="attending">Attending</option>
+                  <option value="declined">Declined</option>
+                </select>
+                {fieldErrors.attendance_status ? <small className="hint danger">{fieldErrors.attendance_status}</small> : null}
+              </label>
+
+              <div className="grid-2">
+                <label className="field">
+                  <span className="field__label">Name *</span>
+                  <input
+                    name="name"
+                    value={form.name}
+                    onChange={onFormChange}
+                    placeholder="Your full name"
+                    className="input"
+                    disabled={isRsvpClosed}
+                  />
+                  {fieldErrors.name ? <small className="hint danger">{fieldErrors.name}</small> : null}
+                </label>
+
+                <label className="field">
+                  <span className="field__label">Email (optional)</span>
+                  <input
+                    name="email"
+                    value={form.email}
+                    onChange={onFormChange}
+                    placeholder="you@email.com"
+                    className="input"
+                    disabled={isRsvpClosed}
+                  />
+                  {fieldErrors.email ? <small className="hint danger">{fieldErrors.email}</small> : null}
+                </label>
+              </div>
+
+              <label className="field">
+                <span className="field__label">Phone (optional)</span>
+                <input
+                  name="phone"
+                  value={form.phone}
+                  onChange={onFormChange}
+                  placeholder="+65 9xxx xxxx"
+                  className="input"
+                  disabled={isRsvpClosed}
+                />
+                {fieldErrors.phone ? <small className="hint danger">{fieldErrors.phone}</small> : null}
+              </label>
+
+              {sessions.length > 0 && form.attendance_status !== "declined" ? (
+                <label className="field">
+                  <span className="field__label">Session (optional)</span>
+                  <select
+                    name="session_id"
+                    value={form.session_id}
+                    onChange={onFormChange}
+                    className="input"
+                    disabled={isRsvpClosed}
+                  >
+                    <option value="">No specific session</option>
+                    {sessions.map((s) => (
+                      <option key={s.id} value={String(s.id)}>
+                        {formatSessionLabel(s)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              <label className="field">
+                <span className="field__label">Remarks (optional)</span>
+                <textarea
+                  name="remarks"
+                  value={form.remarks}
+                  onChange={onFormChange}
+                  placeholder={
+                    form.attendance_status === "declined"
+                      ? "No worries if you can't make it — you can still leave us a message"
+                      : "Anything we should know?"
+                  }
+                  rows={4}
+                  className="input textarea"
+                  disabled={isRsvpClosed}
+                />
+                {fieldErrors.remarks ? <small className="hint danger">{fieldErrors.remarks}</small> : null}
+              </label>
+
+              {form.attendance_status === "declined" ? (
+                <label className="field checkbox">
+                  <input
+                    type="checkbox"
+                    name="allow_public_share"
+                    checked={!!form.allow_public_share}
+                    onChange={onFormChange}
+                    disabled={isRsvpClosed}
+                  />
+                  <span>May share my message publicly (e.g., Instagram story) after the wedding.</span>
+                </label>
+              ) : null}
+
+              <button type="submit" disabled={!canSubmit} className="btn primary">
+                {isRsvpClosed ? "RSVP Closed" : submitting ? "Submitting…" : "Submit RSVP"}
+              </button>
+            </form>
+          </div>
+            </div>
+          </section>
         </div>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          Phone (optional)
-          <input
-            name="phone"
-            value={form.phone}
-            onChange={onFormChange}
-            placeholder="+65 9xxx xxxx"
-            style={inputStyle}
-            disabled={isRsvpClosed}
-          />
-          {fieldErrors.phone ? <small style={{ color: "crimson" }}>{fieldErrors.phone}</small> : null}
-        </label>
-
-        {sessions.length > 0 && form.attendance_status !== "declined" ? (
-          <label style={{ display: "grid", gap: 6 }}>
-            Session (optional)
-            <select
-              name="session_id"
-              value={form.session_id}
-              onChange={onFormChange}
-              style={inputStyle}
-              disabled={isRsvpClosed}
-            >
-              <option value="">No specific session</option>
-              {sessions.map((s) => (
-                <option key={s.id} value={String(s.id)}>
-                  {formatSessionLabel(s)}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-
-
-        <label style={{ display: "grid", gap: 6 }}>
-          Remarks (optional)
-          <textarea
-            name="remarks"
-            value={form.remarks}
-            onChange={onFormChange}
-            placeholder={
-              form.attendance_status === "declined"
-                ? "No worries if you can't make it — you can still leave us a message 💛"
-                : "Anything we should know?"
-            }
-
-            rows={4}
-            style={{ ...inputStyle, resize: "vertical" }}
-            disabled={isRsvpClosed}
-          />
-          {fieldErrors.remarks ? <small style={{ color: "crimson" }}>{fieldErrors.remarks}</small> : null}
-        </label>
-
-        {form.attendance_status === "declined" ? (
-          <label style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <input
-              type="checkbox"
-              name="allow_public_share"
-              checked={!!form.allow_public_share}
-              onChange={onFormChange}
-              disabled={isRsvpClosed}
-              style={{ marginTop: 4 }}
-            />
-            <span style={{ fontSize: 14 }}>
-              May share my message publicly (e.g., Instagram story) after the wedding.
-            </span>
-          </label>
-        ) : null}
-
-
-        {/* Future guest flow - keep hidden unless you want it visible
-        <label style={{ display: "grid", gap: 6 }}>
-          Invite Code (optional)
-          <input
-            name="invite_code"
-            value={form.invite_code}
-            onChange={onFormChange}
-            placeholder="ABC123"
-            style={inputStyle}
-            disabled={isRsvpClosed}
-          />
-          {fieldErrors.invite_code ? <small style={{ color: "crimson" }}>{fieldErrors.invite_code}</small> : null}
-        </label>
-        */}
-
-        <button type="submit" disabled={!canSubmit} style={{ ...btnStyle, opacity: canSubmit ? 1 : 0.6 }}>
-          {isRsvpClosed ? "RSVP Closed" : submitting ? "Submitting…" : "Submit RSVP"}
-        </button>
-      </form>
+      </div>
     </div>
   );
 }
-
-const inputStyle = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #d9ddec",
-  outline: "none",
-  fontSize: 14,
-};
-
-const btnStyle = {
-  padding: "12px 14px",
-  borderRadius: 10,
-  border: "none",
-  fontSize: 15,
-  cursor: "pointer",
-};

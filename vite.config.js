@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://new.test",
+        target: "https://backend.test",
         changeOrigin: true,
         secure: false,
       },
